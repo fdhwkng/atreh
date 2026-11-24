@@ -49,12 +49,35 @@
   }
   .motion-ready { opacity: 0; transform: translateY(22px); }
   .motion-ready.is-visible {
-    animation: rise-in .65s both cubic-bezier(.2,.7,.2,1);
+    opacity: 1; transform: none;
+    animation: rise-in .65s backwards cubic-bezier(.2,.7,.2,1);
     animation-delay: var(--reveal-delay, 0ms);
   }
   .card, .diagram, .cta, .controls button, nav a { transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease, color .2s ease, background-color .2s ease; }
   .card img { transition: transform .35s ease; }
+  @keyframes soft-glow {
+    0%, 100% { text-shadow: 0 0 0 transparent; }
+    50% { text-shadow: 0 0 18px #ffbe7555; }
+  }
+  @keyframes image-drift {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-5px); }
+  }
+  .formula, .value { animation: soft-glow 3s ease-in-out infinite; }
+  .card img { animation: image-drift 4s ease-in-out infinite; }
+  .card:nth-child(2) img { animation-delay: -.8s; }
+  .card:nth-child(3) img { animation-delay: -1.6s; }
+  .card:nth-child(4) img { animation-delay: -2.4s; }
+  .facts > div, .panel, .people li, .team strong, .brand { transition: transform .3s ease, color .3s ease, border-color .3s ease, box-shadow .3s ease; }
+  .section h2::after {
+    content: ''; display: block; width: 48px; height: 3px; margin-top: 14px;
+    border-radius: 3px; background: var(--accent); transform-origin: left;
+    transform: scaleX(.55); transition: transform .5s ease;
+  }
+  .section h2.is-visible::after { transform: scaleX(1); }
   @media (hover: hover) {
+    .brand:hover, .facts > div:hover, .people li:hover { transform: translateY(-3px); color: var(--accent); }
+    .panel:hover { border-color: #ffbe7580; box-shadow: 0 14px 28px #0003; }
     .card:hover { transform: translateY(-5px); border-color: #ffbe7580; box-shadow: 0 14px 28px #0003; }
     .card:hover img { transform: scale(1.04); }
     .diagram:hover { border-color: #ffbe7580; }
@@ -142,10 +165,50 @@ const ctx = radar.getContext('2d');
 let audio;
 let oscillator;
 let soundEnabled = false;
+const motionAllowed = window.matchMedia('(prefers-reduced-motion: no-preference)');
+let visualDistance = Number(distance.value);
+let radarTime = 0;
+let lastFrame = 0;
+let frameId = 0;
+let radarVisible = true;
+
+function renderRadar(timestamp) {
+  frameId = 0;
+  if (!ctx || !motionAllowed.matches || !radarVisible || document.hidden) return;
+  const elapsed = lastFrame ? Math.min(timestamp - lastFrame, 50) : 0;
+  lastFrame = timestamp;
+  radarTime += elapsed;
+  const target = Number(distance.value);
+  visualDistance += (target - visualDistance) * (1 - Math.exp(-elapsed / 140));
+  drawRadar(target, mode !== 'silent', !noEcho.checked);
+  frameId = requestAnimationFrame(renderRadar);
+}
+function refreshRadar() {
+  if (!ctx) return;
+  if (!motionAllowed.matches) visualDistance = Number(distance.value);
+  drawRadar(Number(distance.value), mode !== 'silent', !noEcho.checked);
+  if (motionAllowed.matches && radarVisible && !document.hidden && !frameId) {
+    lastFrame = 0;
+    frameId = requestAnimationFrame(renderRadar);
+  }
+}
+if ('IntersectionObserver' in window) {
+  new IntersectionObserver(([entry]) => {
+    radarVisible = entry.isIntersecting;
+    if (!radarVisible && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
+    refreshRadar();
+  }).observe(radar);
+}
+document.addEventListener('visibilitychange', refreshRadar);
+motionAllowed.addEventListener('change', () => {
+  if (!motionAllowed.matches && frameId) { cancelAnimationFrame(frameId); frameId = 0; }
+  refreshRadar();
+});
 
 function drawRadar(cm, warning, echoReceived) {
   const accent = warning ? '#ff927f' : '#ffbe75';
-  const targetX = 192 + cm * 3.8;
+  const targetX = 192 + visualDistance * 3.8;
+  const beamEnd = echoReceived ? targetX : 614;
   ctx.fillStyle = '#171a1b';
   ctx.fillRect(0, 0, 640, 416);
   ctx.lineWidth = 1;
@@ -164,7 +227,7 @@ function drawRadar(cm, warning, echoReceived) {
   }
   ctx.save();
   ctx.beginPath();
-  ctx.rect(100, 25, targetX - 100, 335);
+  ctx.rect(100, 25, beamEnd - 100, 335);
   ctx.clip();
   ctx.fillStyle = warning ? '#ff927f15' : '#ffbe7513';
   ctx.beginPath();
@@ -173,12 +236,24 @@ function drawRadar(cm, warning, echoReceived) {
   ctx.lineTo(614, 356);
   ctx.closePath();
   ctx.fill();
-  for (let radius = 40; radius <= 490; radius += 45) {
+  // Waves travel out from the sensor; a smaller wave returns after hitting the obstacle.
+  const waveOffset = motionAllowed.matches ? (radarTime * .085) % 55 : 20;
+  for (let radius = 18 + waveOffset; radius <= 530; radius += 55) {
     ctx.beginPath();
     ctx.arc(112, 192, radius, -.315, .315);
-    ctx.strokeStyle = warning ? '#ff927f90' : '#ffbe756e';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = warning ? '#ff927fbb' : '#ffbe75a0';
+    ctx.lineWidth = 2.5;
     ctx.stroke();
+  }
+  if (echoReceived && motionAllowed.matches) {
+    const returnRadius = (radarTime * .11) % Math.max(1, targetX - 112);
+    ctx.beginPath();
+    ctx.arc(targetX, 192, returnRadius, Math.PI - .22, Math.PI + .22);
+    ctx.strokeStyle = warning ? '#ffcfbf99' : '#ffe1b599';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 7]);
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
   ctx.restore();
 
@@ -194,7 +269,13 @@ function drawRadar(cm, warning, echoReceived) {
     ctx.stroke();
   }
   ctx.fillStyle = accent;
-  if (echoReceived) ctx.fillRect(targetX, 125, 7, 134);
+  if (echoReceived) {
+    ctx.save();
+    ctx.shadowColor = accent;
+    ctx.shadowBlur = motionAllowed.matches ? 9 + 7 * (1 + Math.sin(radarTime / 350)) : 0;
+    ctx.fillRect(targetX, 125, 7, 134);
+    ctx.restore();
+  }
   ctx.fillStyle = '#cbd0cc';
   ctx.font = '600 16px monospace';
   ctx.textAlign = 'center';
@@ -266,7 +347,7 @@ function update() {
     : 'Sensor əks siqnal qəbul etmir.';
   distance.setAttribute('aria-valuetext', cm + ' santimetr');
   radar.setAttribute('aria-label', document.querySelector('#scope-distance').textContent + '. ' + status + '.');
-  if (ctx) drawRadar(cm, mode !== 'silent', echoReceived);
+  refreshRadar();
   updateCadence();
 }
 
